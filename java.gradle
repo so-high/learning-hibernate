@@ -1,0 +1,104 @@
+repositories {
+	mavenCentral()
+}
+
+ext {
+	servletVersion = "3.0.1"
+	jspVersion = "2.2"
+
+	javaVersion = '1.7'
+	javaEncoding = 'UTF-8'
+	tmpDir = System.getProperty('java.io.tmpdir')
+
+	junitVersion = '4.11'
+	mockitoVersion = '1.9.5'
+	seleniumVersion = '2.41.0'
+	festVersion = '2.0M10'
+}
+
+ext {
+	baseProvidedDeps = [
+			'webContainers': [
+					"javax.servlet:javax.servlet-api:${servletVersion}",
+					"javax.servlet.jsp:jsp-api:${jspVersion}"
+			]
+	]
+}
+
+sourceCompatibility = javaVersion
+targetCompatibility = javaVersion
+[compileJava, compileTestJava]*.options*.encoding = javaEncoding
+[compileJava, compileTestJava]*.sourceCompatibility = javaVersion
+[compileJava, compileTestJava]*.targetCompatibility = javaVersion
+
+
+/*
+ * 테스트 실행시 -PconfigOverride=src/test/resources/properties/someOtherProperties.xml 형태로 지정하여
+ * 설정값을 Override 할 수 있다.
+ * 파일의 상대/절대 경로만 지정 가능하다.
+ */
+tasks.withType(Test) {
+	useJUnit()
+	maxHeapSize '2048m'
+	ignoreFailures = true
+	jvmArgs '-XX:MaxPermSize=256m'
+
+	/*
+	 Http Proxy가 필요할 경우 아래 설정을 각 project에서 스스로 해줄것
+	systemProperty 'http.proxyHost', '10.10.52.140'
+	systemProperty 'http.proxyPort',  '8888'
+	systemProperty 'https.proxyHost', '10.10.52.140'
+	systemProperty 'https.proxyPort', '8888'
+	*/
+
+	if (project.hasProperty('maxParallelForks')) {
+		maxParallelForks = project.maxParallelForks as int
+	}
+	if (project.hasProperty('forkEvery')) {
+		forkEvery = project.forkEvery as int
+	}
+
+	testLogging {
+		events 'started', 'passed', 'skipped', 'failed'
+		exceptionFormat 'full'
+		showStandardStreams true
+	}
+}
+
+task delombok {
+	ext.srcJava = 'src/main/java'
+	ext.srcDelomboked = "${buildDir}/src-delomboked"
+
+	inputs.files file(srcJava)
+	outputs.dir file(srcDelomboked)
+
+	doLast {
+		def delombokAntTaskClassName = null
+
+		configurations.runtime.resolvedConfiguration.resolvedArtifacts.findAll { raf ->
+			def cid = raf.getModuleVersion().getId()
+			logger.debug "[delombok] resolved artifact ${cid.group}:${cid.name}:${cid.version}"
+			cid.group.equals("org.projectlombok") && cid.name.equals("lombok")
+		}.each { raf ->
+			delombokAntTaskClassName = 'lombok.delombok.ant.DelombokTask'
+			def cid = raf.getModuleVersion().getId()
+			def versionNumbers = cid.version.split('\\.')
+			logger.info "[delombok] Current lombok version numbers : ${versionNumbers}"
+			def firstVersion = versionNumbers[0].toInteger();
+			def secondVersion = versionNumbers[1].toInteger();
+			if (firstVersion > 1 || (firstVersion == 1 && secondVersion >= 16)) {
+				// for 1.16.x or later
+				delombokAntTaskClassName = 'lombok.delombok.ant.Tasks$Delombok'
+			}
+		}
+		logger.info "[delombok] Final delombok ant task class name : ${delombokAntTaskClassName}"
+
+		if (delombokAntTaskClassName == null) {
+			logger.error("[delombok] Project [${project.name}] don't have lombok dependency. Skipping delombok.")
+			return
+		}
+
+		ant.taskdef(name: 'delombok', classname: delombokAntTaskClassName, classpath: configurations.runtime.asPath)
+		ant.delombok(from: srcJava, to: srcDelomboked, verbose: false, encoding: 'UTF-8', classpath: configurations.compile.asPath)
+	}
+}
